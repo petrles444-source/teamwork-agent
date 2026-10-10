@@ -115,6 +115,121 @@ def write_json_atomic(path: Path, data: dict, expect_mtime: float | None = None)
     tmp.replace(path)
 
 
+#: Парные кавычки-разделители. Кавычки, которые открывают и закрывают
+#: цитату, и символы, которые разделяют фрагменты кода.
+#: Открывающий разделитель -> закрывающий. Не просто множество символов,
+#: а соответствие: в русской типографике кавычки-ёлочки ПАРНЫЕ, открывающая
+#: и закрывающая — разные символы (« и »). Список символов вместо пары
+#: приводил к тому, что цитата в «ёлочках» не распознавалась и объявлялась
+#: повреждением файла — то есть исходная задача (не краснеть из-за чужой
+#: цитаты) решалась только для английских кавычек.
+QUOTE_PAIRS = {
+    '"': '"',
+    "'": "'",
+    "`": "`",
+    "\u00ab": "\u00bb",   # «  »
+    "\u201c": "\u201d",   # “  ”
+    "\u201e": "\u201c",   # „  “
+}
+
+
+def _is_intra_word_apostrophe(text: str, index: int) -> bool:
+    """Апостроф ВНУТРИ слова (`it's`, `agent's`), а не кавычка.
+
+    Это различие решает всё. Если считать апостроф кавычкой всегда, то две
+    английские сокращения в одной строке образуют «пару кавычек», и всё
+    повреждение между ними объявляется цитатой и прощается. Агенты пишут
+    описания задач по-английски, сокращения встречаются постоянно, и гейт
+    молча зеленеет на испорченном файле — то есть перестаёт работать ровно
+    тогда, когда он нужен.
+
+    Правило типографское: апостроф внутри слова — между двумя буквами —
+    кавычкой не является. `it's` не открывает цитату, `'цитата'` открывает.
+    """
+    if text[index] != "'":
+        return False
+    before = text[index - 1] if index > 0 else ""
+    after = text[index + 1] if index + 1 < len(text) else ""
+    return before.isalpha() and after.isalpha()
+
+
+def _quoted_spans(text: str) -> list[str]:
+    """Куски текста внутри парных кавычек. Простая эвристика, не парсер.
+
+    Незакрытая кавычка цитатой не считается: содержимое попадает в spans
+    только при закрытии, поэтому настоящий мусор после незакрытой кавычки
+    остаётся видимым. Раньше здесь стоял pop() на пустом списке —
+    IndexError на самом первом же таком значении.
+    """
+    spans: list[str] = []
+    inside = False
+    closer = ""
+    start = 0
+    for i, ch in enumerate(text):
+        if not inside:
+            if ch in QUOTE_PAIRS and not _is_intra_word_apostrophe(text, i):
+                inside = True
+                closer = QUOTE_PAIRS[ch]
+                start = i + 1
+            continue
+        # Внутри цитаты закрывает ТОЛЬКО тот символ, который открыл.
+        if ch == closer:
+            spans.append(text[start:i])
+            inside = False
+            closer = ""
+    return spans
+
+
+def count_mojibake(text: str) -> tuple[int, int]:
+    """Маркеры mojibake: (повреждение, цитата).
+
+    Разделение существенно и появилось не из эстетики. Агент, который
+    чинил испорченную строку, вправе ПРИВЕСТИ её в записи как пример —
+    и тогда валидатор объявлял файл повреждённым из-за цитаты, а
+    repair-encoding не мог её починить (строка закодирована дважды, и
+    обратный проход даёт другой мусор). Гейт координации краснел у всех
+    из-за чужой цитаты, и правильного инструмента для этого не было:
+    оставалось либо редактировать чужую запись, либо мириться с красным
+    гейтом.
+
+    Правило: повреждённый текст ВНУТРИ парных кавычек — цитата, а не файл;
+    вне кавычек — повреждение. Обойти это можно, спрятав мусор в кавычки,
+    и это осознанный поступок, а не случайность; обратная сторона — иначе
+    нельзя описать, что именно чинилось.
+
+    Второе число возвращается наружу и печатается: валидатор, который
+    что-то пропускает, обязан говорить об этом вслух, иначе он молча
+    перестаёт быть строгим.
+    """
+    quoted_total = sum(sum(chunk.count(m) for m in MOJIBAKE_PAIRS)
+                       for chunk in _quoted_spans(text))
+    total = sum(text.count(m) for m in MOJIBAKE_PAIRS)
+    return max(0, total - quoted_total), quoted_total
+
+
+def count_mojibake_in_file(path: Path) -> tuple[int, int]:
+    """Маркеры mojibake в координационном файле: (повреждение, цитата).
+
+    Считается ПО ЗНАЧЕНИЯМ JSON, а не по сырому тексту файла, и это не
+    оптимизация, а корректность. В сыром тексте кавычки из разных строк
+    склеиваются: незакрытая кавычка в чужой фразе съедала следующий за
+    собой настоящий мусор, и повреждение исчезало из отчёта.
+    """
+    real = quoted = 0
+    stack = [read_json(path)]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            r, q = count_mojibake(item)
+            real += r
+            quoted += q
+        elif isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return real, quoted
+
+
 def repair_mojibake_in_place(obj):
     """Рекурсивно чинит mojibake в строках. Возвращает (объект, счётчик).
 
@@ -630,12 +745,16 @@ def cmd_health_check(args) -> int:
         print(f"  P0-БЛОКЕР: {item.get('id')} {item.get('description')}")
 
     # повреждение кодировки
-    mojibake = 0
+    # Цитаты испорченной строки не попадают в счётчик «проблем», но и не
+    # мешают health-check показывать правду: см. count_mojibake.
+    mojibake = quoted_mojibake = 0
     for p in (HANDOFF, PROTOCOL):
         if p.exists():
-            text = p.read_bytes().decode("utf-8-sig")
-            mojibake += sum(text.count(m) for m in MOJIBAKE_PAIRS)
-    print(f"mojibake-маркеров: {mojibake}")
+            real, quoted = count_mojibake_in_file(p)
+            mojibake += real
+            quoted_mojibake += quoted
+    print(f"mojibake-маркеров: {mojibake}"
+          + (f" (+{quoted_mojibake} внутри кавычек — цитаты)" if quoted_mojibake else ""))
 
     # Временные каталоги в корне репозитория. Их появление почти всегда означает
     # ловушку из boundaries.temp_trap: tempfile.gettempdir() в некоторых
@@ -1021,11 +1140,25 @@ def cmd_validate(args) -> int:
         return 2
 
     # 1. кодировка
+    #
+    # Повреждение и ЦИТАТА повреждённой строки считаются раздельно: агент,
+    # который чинил испорченную строку, вправе привести её в записи как
+    # пример, и раньше это делало гейт красным у ВСЕХ, причём
+    # repair-encoding не мог такую цитату починить — она закодирована
+    # дважды, и обратный проход даёт другой мусор. Правильного инструмента
+    # не существовало: оставалось либо редактировать чужую запись, либо
+    # мириться с красным гейтом. См. count_mojibake.
     for p in (HANDOFF, PROTOCOL):
-        text = p.read_bytes().decode("utf-8-sig")
-        hits = sum(text.count(m) for m in MOJIBAKE_PAIRS)
+        hits, quoted = count_mojibake_in_file(p)
         if hits:
-            problems.append(f"{p.name}: mojibake-маркеров {hits} (запустите repair-encoding)")
+            problems.append(f"{p.name}: mojibake-маркеров {hits} "
+                            "(запустите repair-encoding)")
+        if quoted:
+            # Пропущенное проговаривается вслух: молчаливый валидатор,
+            # который перестаёт считать, однажды перестанет замечать.
+            warnings.append(
+                f"{p.name}: ещё {quoted} маркер(ов) внутри кавычек — считаются "
+                f"цитатой испорченной строки, а не повреждением файла")
 
     # 2. схема записей task_log
     #

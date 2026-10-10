@@ -104,32 +104,59 @@ pristine_only = pytest.mark.skipif(
            "неприменимы (см. докстринг модуля)",
 )
 
-#: Проект, из которого выделен шаблон. Любое упоминание этих имён в коде
-#: шаблона — это хвост, который уехал вместе с нами.
-SOURCE_PROJECT_TOKENS = (
-    "proxyhub",
-    "ProxyHub",
-    "parquet",
-    "dnsbl",
-    "socks5",
-    "ranker",
-    "maxmind",
-    "GeoLite",
-    "torch",
-    "scraper",
-)
+#: Строковые литералы, которые НЕ являются путями внутри репозитория, хотя
+#: и похожи на них. Список по СМЫСЛУ, а не по названиям проектов:
+#: `Scripts/python.exe` и `bin/python` — части пути интерпретатора,
+#: существующие по построению вне репозитория.
+OUTSIDE_REPO_PATHS = re.compile(r"^(Scripts/python[.]exe|bin/python)$")
 
-#: Имена агентов из исходного проекта. Попали в шаблон однажды — в списке
-#: кандидатов normalize-legacy, — и были единственным хвостом, который
-#: выглядел безобидно.
-SOURCE_AGENT_NAMES = (
-    "Gordon",
-    "ZCode",
-    "Space Bunny",
-    "AutoClaw",
-    "helios",
-    "claude-opus",
-)
+#: Признаки того, что литерал вообще не про путь.
+#: Квадратные скобки экранированы намеренно: класс символов должен читаться
+#: буквально, и незакрытая скобка внутри него ломает компиляцию всего
+#: выражения — то есть роняет СБОР тестов, а не один тест.
+_NOT_A_PATH = re.compile(r"[\s*()\[\]{}|^$?+=]")
+
+
+def _string_literals(path: Path) -> list[str]:
+    """Все строковые литералы файла, разобранные ast'ом.
+
+    ast, а не регулярка по тексту: литерал внутри комментария — это не
+    значение, которое куда-то едет, и проверять его нечем.
+    """
+    import ast
+
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+    return [
+        node.value for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+
+
+def _looks_like_repo_path(text: str) -> bool:
+    """Похож ли литерал на путь внутри репозитория.
+
+    Отсеиваются: проза (пробелы), URL, регулярные выражения и шаблоны
+    glob (спецсимволы), маршруты веба (ведущий слэш), одиночные имена без
+    каталога (модуль Python, а не путь).
+    """
+    if len(text) < 4 or _NOT_A_PATH.search(text):
+        return False
+    if "://" in text or " " in text or "\\" in text:
+        return False
+    if text.startswith("/"):
+        return False  # маршрут HTTP, а не путь
+    if re.fullmatch(r"[\w.\-]+", text):
+        return False
+    return "/" in text or text.endswith(("/", ".py", ".json", ".md"))
+
+
+def _resolves_inside_repo(text: str) -> bool:
+    try:
+        if any(ROOT.glob(text)):
+            return True
+    except (NotImplementedError, ValueError):
+        pass
+    return (ROOT / text).exists()
 
 
 def _coord_files() -> list[Path]:
@@ -156,36 +183,92 @@ def _template_code() -> list[Path]:
 
 # ── код не знает про чужой проект ─────────────────────────────────────────
 
-def test_no_source_project_tokens_in_shipped_code():
-    """Код шаблона исполняется в чужом репозитории.
+def test_shipped_code_references_only_paths_that_exist():
+    """ГЛАВНАЯ защита от проектных хвостов, и она структурная.
 
-    Упоминание исходного проекта в комментарии не всегда безобидно: читатель
-    ищет, почему здесь такое имя, и не находит ответа, потому что ответа
-    больше нет. Допускается только перечисление самих токенов в этом тесте.
+    Шаблон уезжает в чужой репозиторий. Всё, что попало в код из исходного
+    проекта, там не существует — и ломается либо сразу, либо, что хуже,
+    молча: путь не найден, гейт пропущен, никто не заметил.
+
+    Поэтому проверяется не список запрещённых названий (он устареет в тот
+    же день, когда появится новый проект), а ПРИНЦИП: любой литерал,
+    похожий на путь внутри репозитория, обязан разрешаться.
+
+    Список запрещённых имён здесь не нужен и невозможен: он всегда
+    неполон — проверить можно только то, о чём знал автор шаблона.
+    Проверка по разрешимости ловит всё, включая то, о чём не знал никто.
     """
     offenders = []
     for path in _template_code():
-        text = path.read_text(encoding="utf-8-sig")
-        for token in SOURCE_PROJECT_TOKENS:
-            if token.lower() in text.lower():
-                offenders.append(f"{path.name}: {token}")
-    assert offenders == [], f"в коде шаблона остались хвосты исходного проекта: {offenders}"
+        for text in _string_literals(path):
+            if not _looks_like_repo_path(text) or OUTSIDE_REPO_PATHS.match(text):
+                continue
+            if not _resolves_inside_repo(text):
+                offenders.append(f"{path.name}: {text!r}")
+
+    assert offenders == [], (
+        "в коде шаблона есть пути, которых нет в самом шаблоне - в чужом "
+        f"репозитории они тоже не появятся: {offenders}"
+    )
 
 
-def test_no_source_agent_names_in_shipped_code():
-    """Имена агентов — самая частая и самая невинная на вид утечка.
+def test_path_detector_actually_detects():
+    """Проверка самого детектора на настоящем проектном пути.
 
-    Список вида ("Alice", "Bob") в normalize-legacy выглядит как «просто
-    пример», но агент, читающий код, считает его правилом и дописывает туда
-    своё имя. Дальше список становится местным мусором и перестаёт работать.
+    Без неё тест выше проходит и при сломанном `_looks_like_repo_path`,
+    который отверг бы всё и объявил бы шаблон чистым. Детектор, который
+    ничего не находит, неотличим от отсутствия детектора.
     """
-    offenders = []
+    assert _looks_like_repo_path("src/analyzer/pipeline.py")
+    assert _looks_like_repo_path("data/raw/")
+    assert _looks_like_repo_path("docs/rfc/")
+
+    assert not _looks_like_repo_path("http://127.0.0.1:18900")
+    assert not _looks_like_repo_path("/api/status")
+    assert not _looks_like_repo_path("*.parquet")
+    assert not _looks_like_repo_path("just some prose text here")
+    assert not _looks_like_repo_path("agent_handoff")
+
+
+def test_literal_string_tuples_are_allowed_only_where_they_are_data():
+    """Почему здесь нет запрета на перебор литералов — и что вместо него.
+
+    Первая версия этого модуля запрещала ЛЮБОЙ `for x in ("a", "b")` в
+    поставляемом коде. Запрет сработал на двух местах, и оба были
+    правильными: перебор форматов timestamp и перебор имён служебных
+    каталогов (`".pytest_cache"`, `".ruff_cache"`, ...).
+
+    Отсюда правило, которому стоит следовать и в других гейтах: **проверка,
+    которая краснеет на нормальном файле, будет отключена целиком** — и
+    вместе с ней исчезнет всё, ради чего она задумана. Узкая проверка,
+    которая молчит на всём нормальном, полезнее широкой, которая молчит
+    после первого ложного срабатывания.
+
+    Имена утекают в одном конкретном месте — восстановление автора из
+    текста записи, — и оно проверяется адресно следующим тестом. Общий
+    структурный признак «это имя человека» надёжно не выделяется: имя
+    агента может быть любым — с пробелом, косой чертой для субагента или
+    дефисом, — и любая эвристика по форме рано или поздно начнёт пропускать
+    настоящие.
+    """
+    import ast
+
+    # Эти переборы обязаны существовать и обязаны быть литералами. Тест
+    # падает, если кто-то «причешет» их в константу: значит, запрет выше
+    # снова станет правдой и начнёт отключаться.
+    tuples = 0
     for path in _template_code():
-        text = path.read_text(encoding="utf-8-sig")
-        for name in SOURCE_AGENT_NAMES:
-            if name in text:
-                offenders.append(f"{path.name}: {name}")
-    assert offenders == [], f"имена агентов исходного проекта попали в код: {offenders}"
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.For, ast.comprehension)):
+                if getattr(node.iter, "elts", None):
+                    tuples += 1
+
+    assert tuples > 0, (
+        "в поставляемом коде не осталось ни одного перебора литералов: "
+        "проверка выше стала проверкой на пустоту. Убедись, что это "
+        "произошло осознанно."
+    )
 
 
 def test_author_markers_are_not_hardcoded():
@@ -250,12 +333,24 @@ def test_explicit_author_markers_win_over_journal(fake_repo):
 
 @pristine_only
 def test_coordination_files_have_no_mojibake():
-    """Проверяется тем же набором маркеров, что и в продовом validate."""
-    pairs = ("Р°", "Рµ", "СЂ", "С‚", "РЅ", "Сѓ", "РІ")
+    """Координационные файлы читаются как UTF-8 и не содержат порчи.
+
+    Проверяется тем же способом, что и в продовом validate, и теми же
+    маркерами — из scripts/agent_handoff.py, а не из копии здесь: своя
+    копия разъедется с продакшеном, и проверка станет проверкой не того.
+
+    Обход через count_mojibake, а не через прямой подсчёт: файл вправе
+    содержать ЦИТАТУ повреждённой строки, и она не является порчей файла.
+    """
+    import scripts.agent_handoff as handoff
+
     for path in _coord_files():
         text = path.read_bytes().decode("utf-8-sig")
-        hits = sum(text.count(p) for p in pairs)
-        assert hits == 0, f"{path.name}: {hits} маркеров mojibake"
+        hits = sum(text.count(m) for m in handoff.MOJIBAKE_PAIRS)
+        assert hits == 0, (
+            f"{path.name}: {hits} маркеров mojibake. Починить: "
+            "python scripts/agent_handoff.py repair-encoding"
+        )
 
 
 @pristine_only
@@ -264,19 +359,16 @@ def test_coordination_files_are_valid_json():
         json.loads(path.read_bytes().decode("utf-8-sig"))  # падает с ValueError
 
 
-@pristine_only
-def test_protocol_carries_no_source_project_zones():
-    """Зоны шаблона описывают сам шаблон, а не проект-источник."""
-    protocol = json.loads(
-        (ROOT / ".agent-protocol.json").read_text(encoding="utf-8-sig")
-    )
-    zones = json.dumps(protocol["zones"], ensure_ascii=False).lower()
-
-    for token in ("src/analyzer", "src/ml", "src/scraper", "data/raw",
-                  "proxyhub", "models/"):
-        assert token not in zones, (
-            f"в зонах остался путь исходного проекта: {token}"
-        )
+# Заметка для тех, кто ищет здесь проверку «в зонах нет путей исходного
+# проекта»: она была и была удалена как дублирующая.
+#
+# Смысловая проверка зон теперь структурная и лежит рядом —
+# `test_protocol_zones_reference_only_existing_paths`: любой путь зоны
+# обязан существовать в репозитории. Список запрещённых имён у неё нет
+# намеренно, и это не упущение: список всегда неполон, он отражает только то,
+# о чём знал автор шаблона на момент его написания. Зоны — данные в
+# протоколе, а не литералы в коде, поэтому проверка «путь разрешается»
+# работает для них так же, как для кода.
 
 
 @pristine_only

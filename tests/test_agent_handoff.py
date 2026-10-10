@@ -372,7 +372,7 @@ def test_missing_status_file_does_not_crash(fake_repo, monkeypatch):
 def test_zones_are_not_agent_names(fake_repo):
     protocol, _, _ = fake_repo
     zones = set(read(protocol)["zones"])
-    assert "AutoClaw" not in zones
+    assert "some-agent" not in zones
     assert "coordination" in zones
 
 
@@ -711,6 +711,162 @@ def test_optional_metadata_does_not_block_when_missing(fake_repo):
     handoff_file.write_text(json.dumps(handoff, ensure_ascii=False), encoding="utf-8")
 
     assert run("validate") == 0
+
+
+# --- кодировка: цитата повреждённой строки против повреждения файла ---------
+
+def _marker() -> str:
+    """Настоящий маркер двойного кодирования, собранный из кодов.
+
+    chr(), а не литерал: литерал означал бы, что тест содержит искомую
+    последовательность и проверяет на себе сам.
+    """
+    return "".join(chr(c) for c in (0x420, 0xB0))
+
+
+def test_corruption_inside_quotes_is_a_citation_not_damage():
+    """ГЛАВНЫЙ контракт.
+
+    Агент, который чинил испорченную строку, вправе ПРИВЕСТИ её в записи
+    как пример. Раньше валидатор объявлял файл повреждённым из-за цитаты, а
+    repair-encoding не мог её починить (строка закодирована дважды, и
+    обратный проход даёт другой мусор). Гейт краснел у всех из-за чужой
+    цитаты, и правильного инструмента не существовало: оставалось либо
+    редактировать чужую запись, либо мириться с красным гейтом.
+    """
+    text = f"строка выглядела как «{_marker()}» - починил"
+    real, quoted = handoff.count_mojibake(text)
+
+    assert real == 0, "цитата объявлена повреждением файла"
+    assert quoted > 0, "цитата не засчитана как цитата"
+
+
+def test_corruption_outside_quotes_is_still_damage():
+    """Обратная сторона: правило не должно превращать гейт в декорацию."""
+    real, quoted = handoff.count_mojibake(f"здесь {_marker()} и это порча")
+    assert real > 0 and quoted == 0
+
+
+@pytest.mark.parametrize("open_c, close_c", [
+    ('"', '"'),
+    ("'", "'"),
+    ("`", "`"),
+    ("\u00ab", "\u00bb"),
+    ("\u201c", "\u201d"),
+    ("\u201e", "\u201c"),
+])
+def test_every_known_quote_pair_is_recognised(open_c, close_c):
+    """Русские кавычки-ёлочки парные: открывающая и закрывающая — РАЗНЫЕ символы.
+
+    Список символов вместо соответствия распознавал только английские
+    кавычки, и исходная задача — не краснеть из-за чужой цитаты — решалась
+    для меньшинства языков, в которых написан журнал.
+    """
+    text = f"было {open_c}{_marker()}{close_c} потом починил"
+    real, quoted = handoff.count_mojibake(text)
+    assert real == 0 and quoted > 0, f"пара {open_c!r}...{close_c!r} не распознана"
+
+
+def test_apostrophes_in_english_words_do_not_forgive_damage():
+    """Апостроф внутри слова — не кавычка.
+
+    Это различие решает всё. Если считать апостроф кавычкой всегда, две
+    английские сокращения в одной строке образуют «пару кавычек», и всё
+    повреждение между ними объявляется цитатой и прощается. Описания задач
+    в журнале пишутся по-английски, сокращения встречаются постоянно, и гейт
+    молча зеленеет на испорченном файле — то есть перестаёт работать ровно
+    тогда, когда он нужен.
+    """
+    real, quoted = handoff.count_mojibake(f"it's a {_marker()} thing's broken")
+    assert real > 0, "порча между двумя сокращениями прощена как цитата"
+    assert quoted == 0
+
+
+def test_possessive_pair_does_not_forgive_damage():
+    real, quoted = handoff.count_mojibake(f"agent's log had {_marker()} writer's note")
+    assert real > 0 and quoted == 0
+
+
+def test_real_quotes_apostrophes_still_work():
+    """Проверка обратной стороны: апостроф-кавычка по-прежнему работает."""
+    real, quoted = handoff.count_mojibake(f"it was '{_marker()}' indeed")
+    assert real == 0 and quoted > 0
+
+
+def test_unclosed_quote_does_not_swallow_later_damage():
+    """Незакрытая кавычка цитатой не считается.
+
+    Содержимое попадает в spans только при закрытии, поэтому настоящий мусор
+    после незакрытой кавычки остаётся видимым. Раньше здесь стоял pop() на
+    пустом списке — IndexError на первом же таком значении.
+    """
+    real, _ = handoff.count_mojibake(f'"незакрытая {_marker()} и дальше порча')
+    assert real > 0, "незакрытая кавычка съела повреждение"
+
+
+def test_damage_before_a_quote_is_not_attributed_to_it():
+    text = f"{_marker()} потом \"цитата\""
+    real, quoted = handoff.count_mojibake(text)
+    assert real > 0, "повреждение перед кавычками приписано цитате"
+
+
+def test_counts_are_per_json_value_not_per_raw_file(fake_repo):
+    """Считается по ЗНАЧЕНИЯМ JSON, а не по сырому тексту файла.
+
+    В сыром тексте кавычки из разных строк склеиваются: незакрытая кавычка
+    в чужой фразе съедала следующий за собой настоящий мусор, и повреждение
+    исчезало из отчёта.
+    """
+    _, handoff_file, _ = fake_repo
+    data = read(handoff_file)
+    data["hints"] = ["открытая кавычка \" не закрыта", f"и тут {_marker()} порча"]
+    handoff_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    real, _ = handoff.count_mojibake_in_file(handoff_file)
+    assert real > 0, "повреждение потерялось при склейке кавычек в сыром тексте"
+
+
+def test_validate_reports_a_citation_as_a_warning_not_a_problem(fake_repo, capsys):
+    """Пропущенное проговаривается ВСЛУХ.
+
+    Валидатор, который что-то пропускает, обязан говорить об этом: молчаливый
+    валидатор однажды перестаёт быть строгим, и заметить это некому.
+    """
+    _, hf, _ = fake_repo
+    data = read(hf)
+    data["task_log"] = [{
+        "date": "2026-01-01", "task": "починил кодировку", "author": "me",
+        "status": "DONE", "description": f"было «{_marker()}» - починил",
+        "changed_files": ["a.py"], "verification": "pytest",
+        "result": "1 passed", "coordination_note": "",
+    }]
+    hf.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    assert run("validate") == 0, "цитата сделала гейт блокирующим"
+    out = capsys.readouterr().out
+    assert "внутри кавычек" in out, "пропущенное не проговорено вслух"
+    assert "WARN" in out
+
+
+def test_validate_still_blocks_on_real_damage(fake_repo):
+    _, hf, _ = fake_repo
+    data = read(hf)
+    data["hints"] = [f"порча {_marker()} без кавычек"]
+    hf.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    assert run("validate") == 1
+
+
+def test_count_never_goes_negative():
+    """Защита от арифметики: total - quoted_total не может стать отрицательным.
+
+    Подсчёт идёт по двум независимым проходам, и при изменении любой из
+    сторон расхождение даст отрицательное «повреждение». Отрицательное
+    число выглядело бы как «минус повреждений» и молча ломало бы счётчик.
+    """
+    for text in (f"\"{_marker()}\"", f"«{_marker()}»", _marker()):
+        real, _ = handoff.count_mojibake(text)
+        assert real >= 0, f"отрицательный счётчик на {text!r}"
 
 # --- атомарность -------------------------------------------------------------
 
