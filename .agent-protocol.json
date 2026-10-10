@@ -1,0 +1,217 @@
+{
+    "protocol_version": "2.0",
+    "project": "TEAMWORK-AGENT",
+    "purpose": "Coordination rules for any number of concurrent agents. Rules are keyed by FILE ZONE, never by agent name, so agents can join, leave, or be renamed without rewriting the protocol.",
+    "_how_to_adapt": [
+        "THIS FILE IS THE ONLY SOURCE OF RULES. Everything below describes the MECHANISM, which is universal.",
+        "To adopt teamwork-agent in your project: (1) set 'project'; (2) fill 'zones' with YOUR paths;",
+        "(3) fill 'verification' with YOUR commands; (4) fill 'contracts_easy_to_break' with YOUR contracts;",
+        "(5) fill 'boundaries' with YOUR ports/globs; (6) copy scripts/gates.example.json to scripts/gates.json.",
+        "Steps 2-5 are the ONLY project-specific parts. Delete the '_example' zones when you do.",
+        "Never rewrite principles, claims, zones_policy, conflict_resolution, done_means or priorities:",
+        "that is the part that makes parallel agents stop deadlocking each other."
+    ],
+    "principles": [
+        "An agent is never blocked by the absence of another agent. Every rule below is designed so that a missing, renamed, or finished agent cannot stall anyone else.",
+        "Ownership is advisory; an active claim is the only thing that actually blocks a file. Zones exist to prevent collisions, not to fence people out.",
+        "Coordination files are written only through scripts/agent_handoff.py. Hand edits lose races.",
+        "Rules live here and only here. .agent-handoff.json holds live state (claims, task_log, hints), not rules.",
+        "A missing zone, gate or contract is not a reason to wait. Fill in what you know; write down the rest as a backlog item."
+    ],
+    "zones": {
+        "_comment": "Zone name -> file patterns. Zone names describe AREAS, not people. Any agent may work in any zone; the pattern only tells you who is likely to be there and what collides.",
+        "_how_to_adapt": "Delete the '_comment' and '_how_to_adapt' keys, replace the 'coordination' zone with YOUR top-level components, and put anything dangerous into 'reserved'. A zone list that no longer matches the repository is worse than no zone list at all: validate will WARN on every nonexistent path and agents stop reading the warnings.",
+        "_example": "The 'reserved' zone is intentionally EMPTY. See reserved_rules.",
+        "coordination": [
+            "scripts/agent_handoff.py",
+            "scripts/agent_dashboard.py",
+            "scripts/agent_dashboard.html",
+            "scripts/dev.py",
+            "scripts/gates.example.json",
+            "tests/test_agent_handoff.py",
+            "tests/test_agent_dashboard.py",
+            "tests/test_dev_gates.py",
+            "tests/test_template_universality.py",
+            "tests/conftest.py",
+            ".agent-handoff.json",
+            ".agent-protocol.json",
+            "docs/agent-status.json",
+            "docs/AGENT_PROMPT.md",
+            "docs/TEAM_PROTOCOL.md",
+            "docs/INSTRUCTIONS.md",
+            "docs/PROJECT_STATUS.md",
+            "docs/rfc/"
+        ],
+        "reserved": [],
+        "free": [
+            "Makefile",
+            "PROMT.MD",
+            "README.md",
+            "pyproject.toml",
+            ".github/workflows/gates.yml"
+        ]
+    },
+    "reserved_rules": {
+        "_comment": "The ONLY fenced area. An entry here makes `claim` require an explicit --force. Use it for things whose breakage escapes the repository: OS/network settings, production config, migrations, deploy scripts, secrets. Typically EMPTY in a fresh adoption - an empty list is a valid, safe state.",
+        "_how_to_add": "Add the path to zones.reserved (a list) and describe it here. Then warn the team via: agent_handoff.py hint \"To all: I am taking <path>, reason: ...\""
+    },
+    "zones_policy": {
+        "advisory_not_binding": "A zone listing never blocks you. It only produces a WARN on claim so you notice someone else works there. Only an active claim on a FILE is a real conflict.",
+        "adding_a_zone": "If your file matches no zone, claim it anyway. A missing zone is not a reason to wait. Optionally add the pattern to the closest zone.",
+        "ownership_by_claim": "Who owns a file is decided by the last active claim on it, never by the zone table and never by who appears first in task_log.",
+        "names_are_not_zones": "Do not add agent names to zones. When an agent leaves, its zone entries would block newcomers forever."
+    },
+    "claims": {
+        "max_agents": 5,
+        "what_blocks": "Only an active claim whose files match yours. Everything else is a hint.",
+        "required_fields": [
+            "agent",
+            "task",
+            "files",
+            "started_at",
+            "heartbeat_at",
+            "status"
+        ],
+        "one_claim_one_task": "A claim is one verifiable task. Do not mix a refactor and a bugfix under one claim, or the gate cannot tell which one it confirmed.",
+        "heartbeat_required_after_minutes": 30,
+        "stale_after_minutes": 90,
+        "stale_policy": "A claim with no heartbeat for stale_after_minutes is treated as ABANDONED. Health-check reports it. You may take those files with --force and say so in coordination_note. Do NOT wait indefinitely for a silent agent.",
+        "how_to_take_stale": "python scripts\\agent_handoff.py claim <you> \"<task>\" --files <files> --force   # only for stale claims",
+        "no_ghost_claims": "Always release. If you are interrupted, the stale policy above is the recovery path.",
+        "subagents": "Take a separate claim named <parent>/<role>. Two workers sharing one name collide silently.",
+        "restarted_session": "If your name already holds a LIVE claim, you are a restarted session, not a second agent. Take the name <your-name>/2. Silently reusing the name makes the first session's files look free while it still writes them."
+    },
+    "conflict_resolution": [
+        "Stop editing the conflicting file.",
+        "Re-read the file and .agent-handoff.json; the other agent may have finished.",
+        "Keep the newest compatible behavior unless it breaks a tested contract.",
+        "Record the conflict and the resolution in your task_log entry.",
+        "If the other claim is stale, take the files with --force and say why."
+    ],
+    "verification": {
+        "minimum": "python -m pytest -q",
+        "all_gates": "python scripts/dev.py gates",
+        "before_claim": "Run the gates FIRST so you know the baseline before your change. A red gate you did not cause is not your regression, and you must be able to say which it was.",
+        "_how_to_adapt": "Replace the entries below with YOUR project's commands, or point agents at `python scripts/dev.py gates`, which reads scripts/gates.json. The universal minimum is pytest plus coordination validate; everything else is project-specific and MUST NOT be assumed here.",
+        "exit_codes": "validate returns 1 only for BLOCKING problems (broken coordination JSON, claim on a missing file, mojibake). Legacy task_log entries are WARN and must not fail the run; a red validate that predates your change is not your regression.",
+        "record": "Every completed task gets one dated task_log entry via log-entry, with changed_files, verification commands, and measured result.",
+        "measured_not_asserted": "Record numbers from a real run, not adjectives. 'works' is not a result; '38 passed' is."
+    },
+    "done_means": [
+        "Gates green, checked BEFORE and AFTER your change.",
+        "task_log entry written via log-entry.",
+        "Claim released.",
+        "Your scratch files removed.",
+        "Background servers you started stopped.",
+        "You did not block anyone: if you changed a shared contract, you added a hint."
+    ],
+    "priorities": {
+        "P0": "gates fail; ImportError/AttributeError/SyntaxError; the main path from input to result is broken; coordination JSON corrupted; a public contract stops being readable",
+        "P1": "abandoned task; stale claim; you are blocking another agent; cross-component integration broken by someone else's change",
+        "P2": "work inside a zone you claimed",
+        "P3": "new features",
+        "P4": "refactoring with no measured defect",
+        "rule": "With an open P0, do not start P3 or P4. Check: python scripts\\agent_handoff.py backlog list"
+    },
+    "contracts_easy_to_break": {
+        "_comment": "FILL THIS IN. This is the single highest-value section of the whole template: it is what a new agent reads to know which files it must not casually touch. Leave it empty and every agent re-discovers your breakage rules by breaking them.",
+        "_how_to_add": "One key per contract. Name it, say what breaks it, and point at the test that locks it. Example shape: \"<contract>\": \"<what it is>. Changing <what> requires <what action>. Locked by <test path>.\"",
+        "_example_schema_version": "\"<module>.<Struct>\": \"Change the field set only with a new SCHEMA_VERSION; consumers read it by name.\"",
+        "_example_sentinel": "\"<numeric field>\": \"-1 means NOT CHECKED because <budget reason>. Ranking and filtering must treat -1 as unknown, never as clean. Locked by <test path>.\""
+    },
+    "boundaries": {
+        "_comment": "FILL THIS IN for your project. Everything here is a place where a well-meaning agent loses work or breaks the machine.",
+        "test_ports": "Use port=0 in tests. Reserve a manual range (e.g. 18900-18999) so two agents cannot fight over a port.",
+        "caches": "Tests use tmp_path; benchmarks use a separate cache file. Never a runtime database as a test cache.",
+        "never_commit": [
+            ".venv/",
+            "build/",
+            "*.egg-info/",
+            "*.db",
+            ".scratch/*",
+            ".agent-events.jsonl",
+            ".agent-handoff.backups/"
+        ],
+        "scratch_prefixes": [
+            "tmp",
+            ".scratch",
+            "_e2e_"
+        ],
+        "temp_trap": "Verify where tempfile.gettempdir() points in YOUR environment. In some setups it returns the REPO ROOT, so any mkdtemp() without dir= lands in the working copy. Create scratch dirs explicitly (.scratch/<agent>/<task>/) and delete them in a finally block, including on failure.",
+        "_example_generated": "Add your own: artifact directories, model checkpoints, downloaded datasets, anything a run produces."
+    },
+    "coordination_files": {
+        "one_write_tool": "scripts/agent_handoff.py is the ONLY way to write .agent-handoff.json, .agent-protocol.json and docs/agent-status.json. This is a single TOOL, not a single AUTHOR: any agent may run it, and nobody is appointed to own a file.",
+        "no_lockout": "docs/agent-status.json is self-service: every agent writes its OWN agents.<name>.* section via status-set. There is no single-writer owner, because a single-writer rule silently freezes the journal the moment that one agent is absent, which is exactly the deadlock this protocol version removes.",
+        "status_set_self_service": "python scripts\\agent_handoff.py status-set agents.<your-name>.status DONE",
+        "status_set_gate_results": "python scripts\\agent_handoff.py status-set current_gate '<json>'",
+        "read_order": [
+            ".agent-handoff.json",
+            ".agent-protocol.json",
+            "docs/agent-status.json"
+        ],
+        "encoding": "UTF-8; a BOM may appear, always read as utf-8-sig. Cyrillic saved from cp1251/ANSI becomes mojibake; repair with: python scripts\\agent_handoff.py repair-encoding",
+        "rules_location": "THIS file. .agent-handoff.json -> team_protocol.rules is kept only as a historical pointer and must not be treated as authoritative.",
+        "state_location": ".agent-handoff.json -> team_protocol.active_claims (live claims), task_log (history), hints (one addressed line each)."
+    },
+    "workflow": [
+        "1. Read .agent-handoff.json, .agent-protocol.json, docs/agent-status.json.",
+        "2. Baseline: run python -m pytest -q (or scripts/dev.py gates) BEFORE changing anything.",
+        "3. Check freshness: python scripts\\agent_handoff.py status; who-owns <file> for each target.",
+        "4. Claim one focused task: claim <you> \"<task>\" --files <files>.",
+        "5. Edit atomically. Re-read a file immediately before writing it if it is not yours.",
+        "6. Heartbeat if the task runs longer than 30 minutes.",
+        "7. Re-run the gates.",
+        "8. Record: log-entry with changed_files, verification, measured result, coordination_note.",
+        "9. Update your section of docs/agent-status.json via status-set.",
+        "10. Release the claim and delete your scratch."
+    ],
+    "dashboard": {
+        "launch": "python scripts/agent_dashboard.py",
+        "url": "http://127.0.0.1:18900",
+        "requires": "fastapi + uvicorn (pip install fastapi uvicorn); without them everything else still works",
+        "mode": "read-only; the UI never writes coordination files",
+        "endpoints": [
+            "/api/status",
+            "/api/tasks",
+            "/api/events",
+            "/api/metrics",
+            "/api/summary"
+        ],
+        "not_critical": "If the dashboard is down or was never installed, work continues normally. It is observation, not infrastructure."
+    },
+    "onboarding": {
+        "prompt": "docs\\AGENT_PROMPT.md",
+        "note": "Paste-ready prompt for any new agent. It contains no agent names on purpose. Adding an agent requires NO protocol edit: pick a name, claim files, work."
+    },
+    "normalisation": {
+        "author_markers": [],
+        "note": "Names that `normalize-legacy` may recognise inside a task_log entry title. Empty means: reuse authors already present in this journal. Do not hardcode names in scripts."
+    },
+    "handoff_entry_schema": {
+        "date": "YYYY-MM-DD of the run",
+        "task": "short name of the task",
+        "author": "your agent name",
+        "status": "DONE | IN_PROGRESS | BLOCKED | ABANDONED",
+        "description": "what changed and WHY; the reason matters more than the result",
+        "changed_files": [
+            "..."
+        ],
+        "verification": "the exact commands you ran",
+        "result": "measured numbers, not 'it works'",
+        "next_agent_hint": "mandatory when status != DONE",
+        "coordination_note": "ownership, conflicts, agreements made with other agents",
+        "_comment": "Keys are the schema `validate` enforces. Missing required fields in a NON-legacy entry is a BLOCKING problem; in a legacy entry it is only a warning. date, author and coordination_note are exempted from the blocking check because old entries legitimately lack them."
+    },
+    "backlog": [
+        {
+            "id": "P2-001",
+            "priority": "P2",
+            "area": "coordination",
+            "description": "EXAMPLE — replace or delete. Fill zones with your real paths, verification with your real commands, contracts_easy_to_break with the contracts a new agent must not break, boundaries with your ports and globs, and copy scripts/gates.example.json to scripts/gates.json.",
+            "added_by": "template",
+            "added_at": "",
+            "status": "open"
+        }
+    ]
+}

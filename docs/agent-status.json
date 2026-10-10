@@ -1,0 +1,73 @@
+{
+    "protocol_version": "2.0",
+    "project": "TEAMWORK-AGENT",
+    "updated_at": "",
+    "updated_by": "",
+    "how_to_read": [
+        "1. .agent-handoff.json - live state: active_claims, task_log, hints",
+        "2. .agent-protocol.json - THE rules: zones, gates, contracts, priorities",
+        "3. docs/agent-status.json - this file: who is doing what right now",
+        "Then: python scripts\\agent_handoff.py status; who-owns <file>"
+    ],
+    "self_service": {
+        "note": "This journal is written through scripts\\agent_handoff.py status-set. Every agent writes its OWN section; there is no single-writer owner, because that rule froze the journal whenever its owner was absent.",
+        "your_section": "status-set agents.<your-name>.status IN_PROGRESS --agent <your-name>",
+        "shared_lists": "hints, history and priorities may be written by any agent",
+        "foreign_section": "writing agents.<someone-else>.* is refused with exit code 4; a slot with neither a live claim nor a fresh heartbeat needs --force, a LIVE one also needs --override-live"
+    },
+    "dashboard": {
+        "launch": "python scripts/agent_dashboard.py",
+        "url": "http://127.0.0.1:18900",
+        "requires": "fastapi + uvicorn",
+        "mode": "read-only; the UI never writes coordination files",
+        "endpoints": [
+            "/api/status",
+            "/api/tasks",
+            "/api/events",
+            "/api/metrics",
+            "/api/summary"
+        ],
+        "not_critical": "If it is down, work continues normally."
+    },
+    "current_gate": {},
+    "priorities": {
+        "P0": [],
+        "P1": [],
+        "P2": []
+    },
+    "agents": {},
+    "agent_notes": {
+        "all_agents_are_ephemeral": "Agents appear and disappear. This list is a snapshot, not a roster of permanent owners. Nobody is ever blocked by an entry here: only a live claim on a file blocks that file, and it expires after 90 minutes without a heartbeat.",
+        "add_yourself": "When you start work, add or update your own agents.<name> section via status-set. If you leave, set your status to DONE - do not delete other agents' sections."
+    },
+    "reservations": {},
+    "hints": [
+        {
+            "to": "all",
+            "message": "Protocol v2.0: ownership is decided by a LIVE CLAIM, not by an agent name. who-owns prints 'СВОБОДНО' when nobody holds the file - just take it. ZONES ARE ADVISORY AND NEVER BLOCK."
+        },
+        {
+            "to": "all",
+            "message": "A claim expires after 90 minutes without a heartbeat. status marks it '[УСТАРЕЛ — файлы свободны]' and its files can be taken with --force. Never wait for an agent that stopped responding."
+        },
+        {
+            "to": "all",
+            "message": "docs/agent-status.json is self-service: write your own section with 'status-set agents.<you>.status DONE --agent <you>'. There is no single-writer owner any more."
+        },
+        {
+            "to": "all",
+            "message": "Rules live ONLY in .agent-protocol.json. .agent-handoff.json holds live state (claims, task_log, hints)."
+        },
+        {
+            "to": "all",
+            "message": "At most 5 agents work at once (claims.max_agents). Check 'status' for live claims before starting a new task; expired claims do not count."
+        }
+    ],
+    "history": [],
+    "onboarding": {
+        "prompt": "docs\\AGENT_PROMPT.md",
+        "mechanics": "docs\\TEAM_PROTOCOL.md",
+        "note": "Paste-ready prompt for any new agent. Contains no agent names on purpose. Adding an agent requires NO protocol edit: pick a name, claim files, work."
+    },
+    "next_step": null
+}

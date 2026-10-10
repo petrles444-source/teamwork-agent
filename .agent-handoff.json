@@ -1,0 +1,16 @@
+﻿{
+    "project": "TEAMWORK-AGENT",
+    "updated_by": "",
+    "updated_at": "",
+    "purpose": "Live state shared between agents: active claims, task history, hints. RULES are in .agent-protocol.json — do not read rules from this file.",
+    "observed_state": {},
+    "recommended_next_action": "Fill zones, verification, contracts_easy_to_break and boundaries in .agent-protocol.json, then run: python scripts/agent_handoff.py validate",
+    "remaining_risk": "A fresh template has no project-specific rules filled in. Agents can coordinate, but they cannot know YOUR contracts or gates until you fill the protocol.",
+    "team_protocol": {
+        "purpose": "Live team state: active_claims, task_log, hints.",
+        "rules_note": "Rules live ONLY in .agent-protocol.json. Do not read rules from this file.",
+        "active_claims": {}
+    },
+    "task_log": [],
+    "hints": []
+}

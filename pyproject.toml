@@ -1,0 +1,66 @@
+# teamwork-agent — шаблон координации параллельных агентов.
+#
+# Зависимостей почти нет, и это осознанно: шаблон ставят в чужой репозиторий,
+# и каждая лишняя зависимость становится причиной, по которой его не поставили.
+# Обязателен pytest (гейт). ruff и fastapi нужны отдельным гейтам и ставятся
+# по желанию — их отсутствие превращает гейт в SKIP, а не в падение.
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "teamwork-agent"
+version = "1.0.0"
+description = "Coordination protocol, atomic handoff CLI, gates runner and read-only dashboard for any number of concurrent coding agents in one repository"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+# Ядро пустое: agent_handoff.py и dev.py работают на чистой стандартной
+# библиотеке. Проверено измерением — «обязательные зависимости» в шаблоне
+# означают, что в чужом репозитории coordination ломается о pip.
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+# Дашборд — наблюдение, не инфраструктура. Без него работа продолжается.
+dashboard = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+]
+all = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+]
+
+[tool.setuptools]
+# Скрипты — исполняемые файлы, а не пакет: они запускаются по пути
+# (`python scripts/agent_handoff.py`), и объявлять их пакетами незачем.
+packages = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: долгие тесты",
+    "network: требует реальной сети",
+]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+# extend-exclude, а НЕ exclude: exclude ПОЛНОСТЬЮ заменяет список по умолчанию.
+# Первая версия здесь написала exclude — и ruff перестал пропускать .venv,
+# из-за чего `ruff check .` подскочил с единиц нарушений до десятков тысяч.
+# Обходятся только добавлением, никогда не заменой списка.
+extend-exclude = [".scratch", ".zwork", "pytest-of-*", "build", "*.egg-info"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "B008"]
