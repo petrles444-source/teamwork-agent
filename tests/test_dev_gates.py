@@ -568,3 +568,76 @@ def test_ruff_is_not_a_mandatory_dependency():
     )
     dev_extra = data["project"]["optional-dependencies"]["dev"]
     assert any(item.startswith("ruff") for item in dev_extra)
+
+
+# ── гейт ссылается на несуществующий скрипт ────────────────────────────────
+
+
+def test_missing_script_is_found():
+    """Гейт, чей скрипт не написан, обязан называться ДО прогона.
+
+    Проверено на чистой установке: пример scripts/gates.example.json
+    перенесённый дословно даёт гейты, ссылающиеся на скрипты, которых в
+    новом проекте нет. doctor показывал их как исправные, и человек узнавал
+    о проблеме только из красного прогона — после того, как потратил время.
+    """
+    gate = dev.Gate("e2e", ["-u", "scripts/не_существует.py"], note="n")
+    assert gate.missing_scripts() == ["scripts/не_существует.py"]
+    assert gate.needs_missing_script() is True
+
+
+def test_existing_script_is_not_reported_missing():
+    gate = dev.Gate("coordination",
+                    ["scripts/agent_handoff.py", "validate"], note="n")
+    assert gate.missing_scripts() == []
+    assert gate.needs_missing_script() is False
+
+
+def test_missing_input_gate_is_not_reported_as_missing_script():
+    """requires и «нет скрипта» — разные вещи.
+
+    Гейт с шаблоном входных данных не имеет скриптов вообще, и его
+    отсутствие входных данных не должно выглядеть как сломанный гейт.
+    """
+    gate = dev.Gate("needs_data", ["-m", "pytest", "-q"],
+                    requires="data/*.csv")
+    assert gate.missing_scripts() == []
+
+
+def test_flags_and_module_names_are_not_paths():
+    """`-q` и `pytest` не являются файлами, которых может не быть."""
+    gate = dev.Gate("t", ["-m", "pytest", "-q", "--strict-markers"], note="n")
+    assert gate.missing_scripts() == []
+
+
+def test_doctor_names_the_gates_that_cannot_pass(monkeypatch, capsys):
+    """doctor обязан перечислить гейты, которые не пройдут, и сказать почём.
+
+    Красный гейт, который нельзя починить, приучает не читать остальные:
+    агент привыкает, что `gates` всегда красный, и перестаёт смотреть.
+    Поэтому причина обязана называться ДО прогона.
+    """
+    monkeypatch.setattr(dev, "load_gates", lambda: [
+        dev.Gate("ok_one", ["-m", "pytest", "-q"], note="n"),
+        dev.Gate("ghost", ["-u", "scripts/нет_такого.py"], note="n"),
+    ])
+    monkeypatch.setattr(sys, "argv", ["dev.py", "doctor"])
+
+    dev.doctor()
+    out = capsys.readouterr().out
+
+    assert "НЕТ СКРИПТА" in out, "гейт с отсутствующим скриптом не помечен"
+    assert "scripts/нет_такого.py" in out, "не назван конкретный отсутствующий файл"
+    assert "НЕ ПРОЙДУТ" in out, "не сказано, что эти гейты красные"
+
+
+def test_doctor_lists_missing_tool_by_name(monkeypatch, capsys):
+    monkeypatch.setattr(dev, "_has", lambda m: m != "ruff")
+    monkeypatch.setattr(dev, "load_gates", lambda: list(dev.DEFAULT_GATES))
+    monkeypatch.setattr(sys, "argv", ["dev.py", "doctor"])
+
+    dev.doctor()
+    out = capsys.readouterr().out
+
+    assert "НЕТ ИНСТРУМЕНТА" in out
+    assert "не установлен ruff" in out

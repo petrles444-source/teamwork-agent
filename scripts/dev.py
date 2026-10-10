@@ -125,14 +125,35 @@ def doctor() -> int:
               "Без ruff гейт lint КРАСНЫЙ: это не пропуск.")
 
     print("\nгейты:")
+    # Три разные причины, по которым гейт не пройдёт, и каждая лечится
+    # своим способом. Смешивать их нельзя: отсутствие данных — это «окружение
+    # не готово», отсутствие скрипта — «гейт настроен не на тот проект», а
+    # отсутствие инструмента — «не установлено». Показывать всё одним
+    # словом значит не сказать ничего.
+    broken_gates = []
     for gate in load_gates():
-        if gate.missing_input():
+        missing_scripts = gate.missing_scripts()
+        if missing_scripts:
+            state = "НЕТ СКРИПТА"
+            broken_gates.append(f"{gate.name}: нет {', '.join(missing_scripts)}")
+        elif gate.missing_input():
             state = "SKIP (нет данных)"
         elif gate.needs_missing_tool():
             state = "НЕТ ИНСТРУМЕНТА"
+            broken_gates.append(f"{gate.name}: не установлен {gate.needs}")
         else:
             state = "ok"
         print(f"  [{state:16s}] {gate.name} — {gate.note}")
+
+    if broken_gates:
+        print("\n  ЭТИ ГЕЙТЫ НЕ ПРОЙДУТ:")
+        for item in broken_gates:
+            print(f"    - {item}")
+        print("    Напишите скрипт, укажите другой путь или уберите гейт из "
+              "scripts/gates.json.")
+        print("    Пока они в списке, каждый прогон `gates` будет красным — "
+              "а красный гейт, который нельзя починить, приучает не читать "
+              "остальные.")
 
     if GATES_JSON.exists():
         print(f"\nсписок гейтов переопределён: {GATES_JSON.relative_to(ROOT)}")
@@ -176,6 +197,33 @@ class Gate:
 
     def needs_missing_tool(self) -> bool:
         return bool(self.needs) and not _has(self.needs)
+
+    def missing_scripts(self) -> list[str]:
+        """Файлы из args, которых нет в репозитории.
+
+        Отдельно от `needs` (не установлен пакет) и от `requires` (нет
+        данных). Три причины, почему гейт не пройдёт, и агент должен видеть
+        их все ДО прогона: отсутствующий инструмент лечится установкой,
+        отсутствующие данные — их созданием, отсутствующий скрипт — его
+        написанием или удалением гейта.
+
+        Без этой проверки doctor показывал гейт со ссылкой на несуществующий
+        скрипт как исправный, и человек узнавал о проблеме только из
+        красного прогона — то есть уже после того, как потратил время.
+        """
+        missing = []
+        for arg in self.args:
+            if arg.startswith("-"):
+                continue
+            # Путь внутри репозитория: есть разделитель и нет пробелов.
+            if "/" not in arg or " " in arg:
+                continue
+            if not (ROOT / arg).exists():
+                missing.append(arg)
+        return missing
+
+    def needs_missing_script(self) -> bool:
+        return bool(self.missing_scripts())
 
 
 FLAKY = "МЕРЦАНИЕ"
