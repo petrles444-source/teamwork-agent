@@ -1,7 +1,7 @@
 ﻿{
     "project": "TEAMWORK-AGENT",
-    "updated_by": "",
-    "updated_at": "",
+    "updated_by": "Space Bunny",
+    "updated_at": "2026-10-10",
     "purpose": "Live state shared between agents: active claims, task history, hints. RULES are in .agent-protocol.json — do not read rules from this file.",
     "observed_state": {},
     "recommended_next_action": "Fill zones, verification, contracts_easy_to_break and boundaries in .agent-protocol.json, then run: python scripts/agent_handoff.py validate",
@@ -11,6 +11,48 @@
         "rules_note": "Rules live ONLY in .agent-protocol.json. Do not read rules from this file.",
         "active_claims": {}
     },
-    "task_log": [],
-    "hints": []
+    "task_log": [
+        {
+            "date": "2026-10-10",
+            "task": "выделить универсальный шаблон координации из ProxyHub",
+            "author": "Space Bunny",
+            "status": "DONE",
+            "description": "ProxyHub вырос из 4 агентов, работающих параллельно, и обзавёлся координацией, которая решает реальные проблемы, но была намертво спаяна с предметной областью: зоны указывали на src/analyzer и proxyhub/system_proxy, гейты — на e2e_check и bench_analyze, бэкап lint-храповика — на max_violations=34 конкретного проекта, а список кандидатов normalize-legacy содержал имена helios и Space Bunny. Задача: скопировать механизм целиком и снять все хвосты, не потеряв ни одного свойства, которое делает параллельную работу возможной. Источник не тронут: в ProxyHub остались все 141 записей task_log, его тесты проходят, ничего не перемещалось. Четыре решения, которые стоит отметить. (1) Список гейтов стал конфигурацией scripts/gates.json, а не константой кода: список гейтов меняется чаще раннера, и правка кода означала бы конфликт с любым агентом, который в этот момент правит dev.py. (2) Имена для normalize-legacy перестали быть константой и берутся из протокола с откатом на авторов самого журнала - иначе шаблон уехал бы в новый проект вместе с чужими именами. (3) Единственное предупреждение чистого validate намеренно оставлено: служебные ключи _comment и _how_to_adapt в зонах сигнализируют «протокол не заполнен», и это закреплено тестом, чтобы его не вычистили как лишний шум. (4) Отсутствие инструмента (нет ruff) и отсутствие данных (нет файла для requires) теперь различаются и в doctor, и в раннере: SKIP бывает только по данным, потому что смешение этих двух случаев учит агента не отличать «проверка не выполнена» от «проверка не нужна».",
+            "changed_files": [
+                ".agent-protocol.json",
+                ".agent-handoff.json",
+                ".gitignore",
+                ".gitattributes",
+                "Makefile",
+                "PROMT.MD",
+                "README.md",
+                "docs/AGENT_PROMPT.md",
+                "docs/INSTRUCTIONS.md",
+                "docs/PROJECT_STATUS.md",
+                "docs/TEAM_PROTOCOL.md",
+                "docs/agent-status.json",
+                "docs/rfc/0000-template.md",
+                "docs/rfc/README.md",
+                "pyproject.toml",
+                "scripts/agent_dashboard.html",
+                "scripts/agent_dashboard.py",
+                "scripts/agent_handoff.py",
+                "scripts/dev.py",
+                "scripts/gates.example.json",
+                "tests/conftest.py",
+                "tests/test_agent_dashboard.py",
+                "tests/test_agent_handoff.py",
+                "tests/test_dev_gates.py",
+                "tests/test_gitignore.py",
+                "tests/test_template_universality.py"
+            ],
+            "verification": "python -m pytest -q; python scripts/dev.py gates; python scripts/agent_handoff.py validate; python scripts/agent_handoff.py health-check; python -m ruff check scripts tests",
+            "result": "119 passed, 1 skipped; гейты pytest/lint/coordination - 3 зелёных, 0 красных; validate код 0 с 1 намеренным предупреждением; ruff 0 нарушений. Проверено на чистой установке в отдельный каталог: полный цикл claim -> конфликт -> протухание -> --force -> log-entry -> status-set -> release и повторный прогон гейтов ПОСЛЕ работы (2 claims, 2 записи task_log, 1 hint, слот в журнале) - validate код 0, гейты зелёные. Исходный ProxyHub не изменён: 141 запись task_log на месте, его 55 тестов координации проходят.",
+            "coordination_note": "Найдено и исправлено 4 дефекта, найденных именно проверкой на чистой установке, а не чтением кода: (1) ключи с подчёркиванием в handoff_entry_schema попадали в список обязательных полей и делали validate непроходимым навсегда; (2) next_agent_hint считался обязательным всегда, хотя документация требует его только при status != DONE, - завершённая задача без подсказки роняла гейт; (3) проверки чистоты состояния ломались в установленной копии по прямому назначению - помечены @pristine_only с двумя признаками (заголовок README И пустой журнал, одного мало в обоих направлениях); (4) doctor показывал гейт lint как ok при отсутствующем ruff. Для каждого добавлены регрессионные тесты."
+        }
+    ],
+    "hints": [
+        "To all: этот репозиторий - ШАБЛОН. Проектные части (zones, verification, contracts_easy_to_break, boundaries) заполняет владелец проекта; ядро механизма не переписывать.",
+        "To all: в status-set ключ agents.<имя> должен совпадать с --agent ПОСИМВОЛЬНО, включая пробелы и дефисы. Имя с пробелом пишется так: status-set agents.Space Bunny.status DONE --agent Space Bunny (с кавычками). Несовпадение даёт код 4 - это защита от записи в чужой слот, а не ошибка."
+    ]
 }

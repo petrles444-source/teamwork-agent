@@ -1,8 +1,8 @@
-{
+﻿{
     "protocol_version": "2.0",
     "project": "TEAMWORK-AGENT",
-    "updated_at": "",
-    "updated_by": "",
+    "updated_at": "2026-10-10 13:11",
+    "updated_by": "my-agent",
     "how_to_read": [
         "1. .agent-handoff.json - live state: active_claims, task_log, hints",
         "2. .agent-protocol.json - THE rules: zones, gates, contracts, priorities",
@@ -35,7 +35,14 @@
         "P1": [],
         "P2": []
     },
-    "agents": {},
+    "agents": {
+        "Space Bunny": {
+            "status": "DONE"
+        },
+        "my-agent": {
+            "status": "IDLE"
+        }
+    },
     "agent_notes": {
         "all_agents_are_ephemeral": "Agents appear and disappear. This list is a snapshot, not a roster of permanent owners. Nobody is ever blocked by an entry here: only a live claim on a file blocks that file, and it expires after 90 minutes without a heartbeat.",
         "add_yourself": "When you start work, add or update your own agents.<name> section via status-set. If you leave, set your status to DONE - do not delete other agents' sections."
